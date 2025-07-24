@@ -19,6 +19,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -26,9 +27,12 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Jigsaw-Code/outline-sdk/dns"
+	"github.com/Jigsaw-Code/outline-sdk/network"
+	"github.com/Jigsaw-Code/outline-sdk/network/lwip2transport"
 	"github.com/Jigsaw-Code/outline-sdk/transport"
 	"github.com/Jigsaw-Code/outline-sdk/transport/shadowsocks"
 	"github.com/Jigsaw-Code/outline-sdk/x/connectivity"
@@ -159,6 +163,33 @@ type ProxyResponse struct {
 // 全局代理服务器实例
 var globalProxyServer *http.Server
 
+// VPN 设备相关结构
+type VPNDeviceRequest struct {
+	TransportConfig string `json:"transportConfig"`
+}
+
+type VPNDeviceResponse struct {
+	DeviceID string `json:"deviceId"`
+	Status   string `json:"status"`
+}
+
+type VPNDevice struct {
+	id           string
+	device       network.IPDevice
+	fromDevice   *io.PipeReader  // Android 从这里读取 (设备输出)
+	toDevice     *io.PipeWriter  // Android 写入到这里 (设备输入)
+	fromAndroid  *io.PipeReader  // 设备从这里读取 (Android 输出)
+	toAndroid    *io.PipeWriter  // 设备写入到这里 (Android 输入) 
+	cancel       context.CancelFunc
+	mu           sync.RWMutex
+}
+
+// 全局 VPN 设备管理
+var (
+	vpnDevices = make(map[string]*VPNDevice)
+	vpnMutex   sync.RWMutex
+)
+
 func Platform() PlatformMetadata {
 	return PlatformMetadata{OS: runtime.GOOS}
 }
@@ -224,6 +255,178 @@ type streamDialerAdapter struct {
 
 func (s *streamDialerAdapter) DialStream(ctx context.Context, addr string) (transport.StreamConn, error) {
 	return s.dialer.DialStream(ctx, addr)
+}
+
+// VPN 设备管理函数
+func CreateVPNDevice(request VPNDeviceRequest) (*VPNDeviceResponse, error) {
+	// 创建传输配置
+	configModule := configurl.NewDefaultProviders()
+	
+	// 创建 Stream 拨号器
+	sd, err := configModule.NewStreamDialer(context.Background(), request.TransportConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create stream dialer: %w", err)
+	}
+	
+	// 创建 Packet 监听器和代理
+	pl, err := configModule.NewPacketListener(context.Background(), request.TransportConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create packet listener: %w", err)
+	}
+	
+	pp, err := network.NewPacketProxyFromPacketListener(pl)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create packet proxy: %w", err)
+	}
+	
+	// 使用 lwIP 配置设备
+	log.Printf("Creating lwIP device with transport config...")
+	device, err := lwip2transport.ConfigureDevice(sd, pp)
+	if err != nil {
+		log.Printf("Failed to configure lwIP device: %v", err)
+		return nil, fmt.Errorf("failed to configure lwIP device: %w", err)
+	}
+	log.Printf("lwIP device configured successfully")
+	
+	// 创建双向管道用于与 Android 通信
+	// 管道 1: Android 读取 (lwIP -> Android)
+	androidReader, deviceWriter := io.Pipe()
+	// 管道 2: Android 写入 (Android -> lwIP)  
+	deviceReader, androidWriter := io.Pipe()
+	
+	// 创建上下文用于管理生命周期
+	ctx, cancel := context.WithCancel(context.Background())
+	
+	// 生成设备 ID
+	deviceID := fmt.Sprintf("vpn-device-%d", time.Now().Unix())
+	
+	vpnDevice := &VPNDevice{
+		id:          deviceID,
+		device:      device,
+		fromDevice:  androidReader,    // Android 从这里读取
+		toAndroid:   deviceWriter,     // lwIP 写入这里 -> Android
+		fromAndroid: deviceReader,     // lwIP 从这里读取 <- Android  
+		toDevice:    androidWriter,    // Android 写入这里
+		cancel:      cancel,
+	}
+	
+	// 存储设备
+	vpnMutex.Lock()
+	vpnDevices[deviceID] = vpnDevice
+	vpnMutex.Unlock()
+	
+	// 启动数据转发协程
+	go vpnDevice.startForwarding(ctx)
+	
+	return &VPNDeviceResponse{
+		DeviceID: deviceID,
+		Status:   "created",
+	}, nil
+}
+
+func (vd *VPNDevice) startForwarding(ctx context.Context) {
+	defer func() {
+		vd.cleanup()
+	}()
+	
+	// 启动双向数据转发
+	done := make(chan error, 2)
+	
+	// lwIP 设备 -> Android (设备输出复制到 Android 读取管道)
+	go func() {
+		log.Printf("VPN device %s: Starting lwIP->Android forwarding", vd.id)
+		n, err := io.Copy(vd.toAndroid, vd.device)
+		log.Printf("VPN device %s: lwIP->Android copy ended: %d bytes, error: %v", vd.id, n, err)
+		done <- err
+	}()
+	
+	// Android -> lwIP 设备 (Android 写入管道复制到设备输入)
+	go func() {
+		log.Printf("VPN device %s: Starting Android->lwIP forwarding", vd.id)
+		n, err := io.Copy(vd.device, vd.fromAndroid)
+		log.Printf("VPN device %s: Android->lwIP copy ended: %d bytes, error: %v", vd.id, n, err)
+		done <- err
+	}()
+	
+	// 等待任一方向完成或上下文取消
+	select {
+	case <-ctx.Done():
+		log.Printf("VPN device %s context cancelled", vd.id)
+	case err := <-done:
+		if err != nil {
+			log.Printf("VPN device %s forwarding error: %v", vd.id, err)
+		}
+	}
+}
+
+func (vd *VPNDevice) cleanup() {
+	vd.mu.Lock()
+	defer vd.mu.Unlock()
+	
+	if vd.fromDevice != nil {
+		vd.fromDevice.Close()
+	}
+	if vd.toAndroid != nil {
+		vd.toAndroid.Close()
+	}
+	if vd.fromAndroid != nil {
+		vd.fromAndroid.Close()
+	}
+	if vd.toDevice != nil {
+		vd.toDevice.Close()
+	}
+	if vd.device != nil {
+		vd.device.Close()
+	}
+	
+	// 从全局映射中移除
+	vpnMutex.Lock()
+	delete(vpnDevices, vd.id)
+	vpnMutex.Unlock()
+}
+
+func GetVPNDevice(deviceID string) (*VPNDevice, error) {
+	vpnMutex.RLock()
+	device, exists := vpnDevices[deviceID]
+	vpnMutex.RUnlock()
+	
+	if !exists {
+		return nil, fmt.Errorf("VPN device %s not found", deviceID)
+	}
+	
+	return device, nil
+}
+
+func StopVPNDevice(deviceID string) error {
+	device, err := GetVPNDevice(deviceID)
+	if err != nil {
+		return err
+	}
+	
+	device.cancel()
+	return nil
+}
+
+// Android 写入数据到 lwIP 设备 (TUN -> lwIP)
+func WriteToVPNDevice(deviceID string, data []byte) (int, error) {
+	device, err := GetVPNDevice(deviceID)
+	if err != nil {
+		return 0, err
+	}
+	
+	// Android 写入 -> lwIP 设备
+	return device.toDevice.Write(data)
+}
+
+// Android 从 lwIP 设备读取数据 (lwIP -> TUN)
+func ReadFromVPNDevice(deviceID string, buffer []byte) (int, error) {
+	device, err := GetVPNDevice(deviceID)
+	if err != nil {
+		return 0, err
+	}
+	
+	// lwIP 设备 -> Android 读取
+	return device.fromDevice.Read(buffer)
 }
 
 func makeErrorRecord(connectivityErr *connectivity.ConnectivityError, err error) *ConnectivityTestError {

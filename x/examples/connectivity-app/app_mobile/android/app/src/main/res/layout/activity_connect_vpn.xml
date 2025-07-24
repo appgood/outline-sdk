@@ -17,22 +17,22 @@
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Outline 代理服务"
+            android:layout_marginBottom="24dp"
+            android:gravity="center"
+            android:text="Outline VPN 服务"
+            android:textColor="@android:color/black"
             android:textSize="24sp"
             android:textStyle="bold"
-            android:gravity="center"
-            android:layout_marginBottom="24dp"
-            android:textColor="@android:color/black"
             tools:ignore="HardcodedText" />
 
         <!-- VPN 状态指示器 -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:gravity="center_vertical"
             android:layout_marginBottom="16dp"
             android:background="@android:color/background_light"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
             android:padding="12dp">
 
             <TextView
@@ -47,8 +47,8 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="未连接"
-                android:textSize="16sp"
-                android:textColor="@android:color/holo_red_dark" />
+                android:textColor="@android:color/holo_red_dark"
+                android:textSize="16sp" />
 
         </LinearLayout>
 
@@ -65,10 +65,10 @@
                 android:id="@+id/editTextVPNAccessKey"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
+                android:hint="ss://..."
                 android:inputType="textMultiLine"
                 android:maxLines="4"
-                android:scrollbars="vertical"
-                android:hint="ss://..." />
+                android:scrollbars="vertical" />
 
         </com.google.android.material.textfield.TextInputLayout>
 
@@ -76,35 +76,35 @@
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:layout_marginBottom="24dp">
+            android:layout_marginBottom="24dp"
+            android:orientation="horizontal">
 
             <Button
                 android:id="@+id/buttonConnect"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
-                android:layout_weight="1"
                 android:layout_marginEnd="8dp"
-                android:text="启动代理"
-                android:textSize="16sp"
-                android:textStyle="bold"
+                android:layout_weight="1"
                 android:background="@android:color/holo_green_dark"
+                android:padding="12dp"
+                android:text="连接 VPN"
                 android:textColor="@android:color/white"
-                android:padding="12dp" />
+                android:textSize="16sp"
+                android:textStyle="bold" />
 
             <Button
                 android:id="@+id/buttonDisconnect"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
-                android:layout_weight="1"
                 android:layout_marginStart="8dp"
-                android:text="停止代理"
-                android:textSize="16sp"
-                android:textStyle="bold"
+                android:layout_weight="1"
                 android:background="@android:color/holo_red_dark"
-                android:textColor="@android:color/white"
+                android:enabled="false"
                 android:padding="12dp"
-                android:enabled="false" />
+                android:text="断开 VPN"
+                android:textColor="@android:color/white"
+                android:textSize="16sp"
+                android:textStyle="bold" />
 
         </LinearLayout>
 
@@ -112,11 +112,11 @@
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="连接信息"
-            android:textSize="18sp"
-            android:textStyle="bold"
             android:layout_marginBottom="8dp"
-            android:textColor="@android:color/black" />
+            android:text="连接信息"
+            android:textColor="@android:color/black"
+            android:textSize="18sp"
+            android:textStyle="bold" />
 
         <ScrollView
             android:layout_width="match_parent"
@@ -129,11 +129,11 @@
                 android:id="@+id/textViewProxyInfo"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="请输入 Outline 访问密钥并点击连接"
-                android:textSize="14sp"
                 android:fontFamily="monospace"
+                android:lineSpacingExtra="4dp"
+                android:text="请输入 Outline 访问密钥并点击连接"
                 android:textColor="@android:color/black"
-                android:lineSpacingExtra="4dp" />
+                android:textSize="14sp" />
 
         </ScrollView>
 
@@ -141,11 +141,12 @@
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="📘 说明: 这将创建本地 HTTP 代理服务器\n\n🔧 需要手动配置浏览器或应用使用代理\n\n🌐 代理地址将在连接后显示"
-            android:textSize="12sp"
-            android:textColor="@android:color/darker_gray"
             android:layout_marginTop="16dp"
-            android:gravity="center" />
+            android:gravity="center"
+            android:text="📘 说明: 这将创建本地 HTTP 代理服务器\n\n🔧 需要手动配置浏览器或应用使用代理\n\n🌐 代理地址将在连接后显示"
+            android:textColor="@android:color/darker_gray"
+            android:textSize="12sp"
+            android:visibility="gone" />
 
     </LinearLayout>
 

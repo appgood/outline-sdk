@@ -66,6 +66,30 @@ func HandleRequest(rawRequest []byte) []byte {
 		}
 
 		result, resultError = CreateProxy(parameters)
+	} else if request.ResourceName == "CreateVPNDevice" {
+		var parameters VPNDeviceRequest
+
+		unmarshallingParametersError := json.Unmarshal([]byte(request.Parameters), &parameters)
+
+		if unmarshallingParametersError != nil {
+			response.Error = "HandleRequest: error parsing method input"
+		}
+
+		result, resultError = CreateVPNDevice(parameters)
+	} else if request.ResourceName == "StopVPNDevice" {
+		type StopVPNDeviceRequest struct {
+			DeviceID string `json:"deviceId"`
+		}
+		var parameters StopVPNDeviceRequest
+
+		unmarshallingParametersError := json.Unmarshal([]byte(request.Parameters), &parameters)
+
+		if unmarshallingParametersError != nil {
+			response.Error = "HandleRequest: error parsing method input"
+		}
+
+		resultError = StopVPNDevice(parameters.DeviceID)
+		result = map[string]string{"status": "stopped"}
 	} else {
 		response.Error = "HandleRequest: method name not found"
 	}
