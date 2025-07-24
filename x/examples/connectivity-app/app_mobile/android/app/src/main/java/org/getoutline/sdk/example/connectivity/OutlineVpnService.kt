@@ -116,16 +116,16 @@ class OutlineVpnService : VpnService() {
                     .addDnsServer("1.1.1.1")      // 添加 Cloudflare DNS
                     .setSession("Outline VPN")
                     .setBlocking(false)           // 非阻塞模式
-                
-                // 排除本地网络和 VPN 服务器避免路由循环
-                try {
+
+                // 排除本地网络和 VPN 服务器避免路由循环，可以作为 全局模式 / 应用模式 配置
+                /*try {
                     // 排除本地网络
                     builder.addDisallowedApplication(packageName)  // 排除自己
                 } catch (e: Exception) {
                     Log.w(TAG, "Failed to add disallowed applications: ${e.message}")
-                }
+                }*/
 
-                
+
                 vpnInterface = builder.establish()
                 
                 if (vpnInterface == null) {
