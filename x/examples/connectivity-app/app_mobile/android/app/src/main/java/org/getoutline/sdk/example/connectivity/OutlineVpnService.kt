@@ -7,6 +7,7 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.net.VpnService
+import android.os.Build
 import android.os.IBinder
 import android.os.ParcelFileDescriptor
 import android.util.Log
@@ -75,17 +76,19 @@ class OutlineVpnService : VpnService() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     private fun createNotificationChannel() {
-        val channel = NotificationChannel(
-            NOTIFICATION_CHANNEL_ID,
-            "Outline VPN 服务",
-            NotificationManager.IMPORTANCE_LOW
-        ).apply {
-            description = "Outline VPN 连接状态"
-            setShowBadge(false)
-        }
-
-        val notificationManager = getSystemService(NotificationManager::class.java)
-        notificationManager.createNotificationChannel(channel)
+		// 只有在 Android O (API level 26) 及更高版本上才创建通知渠道
+         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+			val channel = NotificationChannel(
+				NOTIFICATION_CHANNEL_ID,
+				"Outline VPN 服务",
+				NotificationManager.IMPORTANCE_LOW
+			).apply {
+				description = "Outline VPN 连接状态"
+				setShowBadge(false)
+			}
+			 val notificationManager = getSystemService(NotificationManager::class.java)
+			 notificationManager.createNotificationChannel(channel)
+		 }
     }
 
     private fun createNotification(title: String, message: String): Notification {
