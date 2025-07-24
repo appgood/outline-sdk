@@ -20,6 +20,7 @@
     "strict": true,
     "target": "ES5",
     "useDefineForClassFields": false,
+    "types": ["node"]
   },
   "references": [
     {

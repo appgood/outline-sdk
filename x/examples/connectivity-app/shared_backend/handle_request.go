@@ -56,6 +56,16 @@ func HandleRequest(rawRequest []byte) []byte {
 		result, resultError = ConnectivityTest(parameters)
 	} else if request.ResourceName == "Platform" {
 		result = Platform()
+	} else if request.ResourceName == "CreateProxy" {
+		var parameters ProxyRequest
+
+		unmarshallingParametersError := json.Unmarshal([]byte(request.Parameters), &parameters)
+
+		if unmarshallingParametersError != nil {
+			response.Error = "HandleRequest: error parsing method input"
+		}
+
+		result, resultError = CreateProxy(parameters)
 	} else {
 		response.Error = "HandleRequest: method name not found"
 	}

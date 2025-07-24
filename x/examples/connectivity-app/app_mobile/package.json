@@ -11,7 +11,7 @@
   "devDependencies": {
     "@capacitor/cli": "latest",
     "concurrently": "^8.2.0",
-    "typescript": "^5.1.6",
+    "typescript": "^5.8.3",
     "vite": "^2.9.13"
   },
   "name": "app_mobile",

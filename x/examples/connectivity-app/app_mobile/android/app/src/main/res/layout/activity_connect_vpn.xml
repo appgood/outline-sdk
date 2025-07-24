@@ -5,7 +5,7 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:fillViewport="true"
-    tools:context=".MainActivity">
+    tools:context=".ConnectVPNActivity">
 
     <LinearLayout
         android:layout_width="match_parent"
@@ -17,24 +17,52 @@
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Outline 连接测试"
+            android:text="Outline 代理服务"
             android:textSize="24sp"
             android:textStyle="bold"
             android:gravity="center"
             android:layout_marginBottom="24dp"
-            android:textColor="@android:color/black" />
+            android:textColor="@android:color/black"
+            tools:ignore="HardcodedText" />
+
+        <!-- VPN 状态指示器 -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:layout_marginBottom="16dp"
+            android:background="@android:color/background_light"
+            android:padding="12dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="状态: "
+                android:textSize="16sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/textViewStatus"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="未连接"
+                android:textSize="16sp"
+                android:textColor="@android:color/holo_red_dark" />
+
+        </LinearLayout>
 
         <!-- Access Key 输入 -->
         <com.google.android.material.textfield.TextInputLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginBottom="16dp"
+            android:layout_marginBottom="24dp"
             android:hint="Outline 访问密钥 *"
             app:boxStrokeColor="@android:color/holo_blue_dark"
             app:hintTextColor="@android:color/holo_blue_dark">
 
             <com.google.android.material.textfield.TextInputEditText
-                android:id="@+id/editTextAccessKey"
+                android:id="@+id/editTextVPNAccessKey"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:inputType="textMultiLine"
@@ -44,45 +72,7 @@
 
         </com.google.android.material.textfield.TextInputLayout>
 
-        <!-- 测试域名输入 -->
-        <com.google.android.material.textfield.TextInputLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginBottom="16dp"
-            android:hint="测试域名 *"
-            app:boxStrokeColor="@android:color/holo_blue_dark"
-            app:hintTextColor="@android:color/holo_blue_dark">
-
-            <com.google.android.material.textfield.TextInputEditText
-                android:id="@+id/editTextDomain"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:inputType="textUri"
-                android:singleLine="true" />
-
-        </com.google.android.material.textfield.TextInputLayout>
-
-        <!-- DNS 解析器输入 -->
-        <com.google.android.material.textfield.TextInputLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginBottom="24dp"
-            android:hint="DNS 解析器 (每行一个) *"
-            app:boxStrokeColor="@android:color/holo_blue_dark"
-            app:hintTextColor="@android:color/holo_blue_dark">
-
-            <com.google.android.material.textfield.TextInputEditText
-                android:id="@+id/editTextResolvers"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:inputType="textMultiLine"
-                android:lines="3"
-                android:gravity="top"
-                android:scrollbars="vertical" />
-
-        </com.google.android.material.textfield.TextInputLayout>
-
-        <!-- 测试按钮 -->
+        <!-- 连接按钮组 -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -90,38 +80,39 @@
             android:layout_marginBottom="24dp">
 
             <Button
-                android:id="@+id/buttonTest"
+                android:id="@+id/buttonConnect"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
                 android:layout_marginEnd="8dp"
-                android:text="连接测试"
-                android:textSize="16sp"
-                android:textStyle="bold"
-                android:background="@android:color/holo_blue_dark"
-                android:textColor="@android:color/white"
-                android:padding="12dp" />
-
-            <Button
-                android:id="@+id/buttonVPN"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:layout_marginStart="8dp"
-                android:text="VPN 连接"
+                android:text="启动代理"
                 android:textSize="16sp"
                 android:textStyle="bold"
                 android:background="@android:color/holo_green_dark"
                 android:textColor="@android:color/white"
                 android:padding="12dp" />
 
+            <Button
+                android:id="@+id/buttonDisconnect"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:layout_marginStart="8dp"
+                android:text="停止代理"
+                android:textSize="16sp"
+                android:textStyle="bold"
+                android:background="@android:color/holo_red_dark"
+                android:textColor="@android:color/white"
+                android:padding="12dp"
+                android:enabled="false" />
+
         </LinearLayout>
 
-        <!-- 结果显示区域 -->
+        <!-- 代理信息显示区域 -->
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="测试结果"
+            android:text="连接信息"
             android:textSize="18sp"
             android:textStyle="bold"
             android:layout_marginBottom="8dp"
@@ -135,16 +126,26 @@
             android:padding="12dp">
 
             <TextView
-                android:id="@+id/textViewResult"
+                android:id="@+id/textViewProxyInfo"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="点击上方按钮开始测试..."
+                android:text="请输入 Outline 访问密钥并点击连接"
                 android:textSize="14sp"
                 android:fontFamily="monospace"
                 android:textColor="@android:color/black"
                 android:lineSpacingExtra="4dp" />
 
         </ScrollView>
+
+        <!-- 说明文字 -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="📘 说明: 这将创建本地 HTTP 代理服务器\n\n🔧 需要手动配置浏览器或应用使用代理\n\n🌐 代理地址将在连接后显示"
+            android:textSize="12sp"
+            android:textColor="@android:color/darker_gray"
+            android:layout_marginTop="16dp"
+            android:gravity="center" />
 
     </LinearLayout>
 

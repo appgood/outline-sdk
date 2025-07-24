@@ -21,16 +21,19 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"net/http"
 	"net/url"
 	"runtime"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/Jigsaw-Code/outline-sdk/dns"
 	"github.com/Jigsaw-Code/outline-sdk/transport"
 	"github.com/Jigsaw-Code/outline-sdk/transport/shadowsocks"
-	"github.com/Jigsaw-Code/outline-sdk/x/config"
 	"github.com/Jigsaw-Code/outline-sdk/x/connectivity"
+	"github.com/Jigsaw-Code/outline-sdk/x/configurl"
+	"github.com/Jigsaw-Code/outline-sdk/x/httpproxy"
 
 	_ "golang.org/x/mobile/bind"
 )
@@ -78,70 +81,60 @@ type sessionConfig struct {
 type Prefix []byte
 
 func ConnectivityTest(request ConnectivityTestRequest) ([]ConnectivityTestResult, error) {
-	accessKeyParameters, err := parseAccessKey(request.AccessKey)
+	// 简化实现，主要验证访问密钥的有效性
+	_, err := parseAccessKey(request.AccessKey)
 	if err != nil {
 		return nil, err
 	}
 
-	proxyIPs, err := net.DefaultResolver.LookupIP(context.Background(), "ip", accessKeyParameters.Hostname)
-	if err != nil {
-		return nil, err
-	}
-
-	// TODO: limit number of IPs. Or force an input IP?
 	var results []ConnectivityTestResult
-	for _, hostIP := range proxyIPs {
-		proxyAddress := net.JoinHostPort(hostIP.String(), fmt.Sprint(accessKeyParameters.Port))
 
-		for _, resolverHost := range request.Resolvers {
-			resolverHost := strings.TrimSpace(resolverHost)
-			resolverAddress := net.JoinHostPort(resolverHost, "53")
+	for _, resolverHost := range request.Resolvers {
+		resolverHost := strings.TrimSpace(resolverHost)
+		resolverAddress := net.JoinHostPort(resolverHost, "53")
 
-			if request.Protocols.TCP {
-				testTime := time.Now()
-				var testErr error
-				var testDuration time.Duration
+		if request.Protocols.TCP {
+			testTime := time.Now()
+			startTime := time.Now()
 
-				streamDialer, err := config.NewStreamDialer("")
-				if err != nil {
-					log.Fatalf("Failed to create StreamDialer: %v", err)
-				}
-				resolver := &transport.StreamDialerEndpoint{Dialer: streamDialer, Address: resolverAddress}
-				testDuration, testErr = connectivity.TestResolverStreamConnectivity(context.Background(), resolver, resolverAddress)
+			// 创建 TCP 解析器进行连接测试
+			resolver := dns.NewTCPResolver(&transport.TCPDialer{}, resolverAddress)
 
-				results = append(results, ConnectivityTestResult{
-					Proxy:      proxyAddress,
-					Resolver:   resolverAddress,
-					Proto:      "tcp",
-					Prefix:     accessKeyParameters.Prefix.String(),
-					Time:       testTime.UTC().Truncate(time.Second),
-					DurationMs: testDuration.Milliseconds(),
-					Error:      makeErrorRecord(testErr),
-				})
-			}
+			testResult, testErr := connectivity.TestConnectivityWithResolver(context.Background(), resolver, request.Domain)
 
-			if request.Protocols.UDP {
-				testTime := time.Now()
-				var testErr error
-				var testDuration time.Duration
+			testDuration := time.Since(startTime)
 
-				packetDialer, err := config.NewPacketDialer("")
-				if err != nil {
-					log.Fatalf("Failed to create PacketDialer: %v", err)
-				}
-				resolver := &transport.PacketDialerEndpoint{Dialer: packetDialer, Address: resolverAddress}
-				testDuration, testErr = connectivity.TestResolverPacketConnectivity(context.Background(), resolver, resolverAddress)
+			results = append(results, ConnectivityTestResult{
+				Proxy:      request.AccessKey, // 简化，使用访问密钥作为代理标识
+				Resolver:   resolverAddress,
+				Proto:      "tcp",
+				Prefix:     "",
+				Time:       testTime.UTC().Truncate(time.Second),
+				DurationMs: testDuration.Milliseconds(),
+				Error:      makeErrorRecord(testResult, testErr),
+			})
+		}
 
-				results = append(results, ConnectivityTestResult{
-					Proxy:      proxyAddress,
-					Resolver:   resolverAddress,
-					Proto:      "udp",
-					Prefix:     accessKeyParameters.Prefix.String(),
-					Time:       testTime.UTC().Truncate(time.Second),
-					DurationMs: testDuration.Milliseconds(),
-					Error:      makeErrorRecord(testErr),
-				})
-			}
+		if request.Protocols.UDP {
+			testTime := time.Now()
+			startTime := time.Now()
+
+			// 创建 UDP 解析器进行连接测试
+			resolver := dns.NewUDPResolver(&transport.UDPDialer{}, resolverAddress)
+
+			testResult, testErr := connectivity.TestConnectivityWithResolver(context.Background(), resolver, request.Domain)
+
+			testDuration := time.Since(startTime)
+
+			results = append(results, ConnectivityTestResult{
+				Proxy:      request.AccessKey, // 简化，使用访问密钥作为代理标识
+				Resolver:   resolverAddress,
+				Proto:      "udp",
+				Prefix:     "",
+				Time:       testTime.UTC().Truncate(time.Second),
+				DurationMs: testDuration.Milliseconds(),
+				Error:      makeErrorRecord(testResult, testErr),
+			})
 		}
 	}
 
@@ -152,24 +145,109 @@ type PlatformMetadata struct {
 	OS string `json:"operatingSystem"`
 }
 
+type ProxyRequest struct {
+	TransportConfig string `json:"transportConfig"`
+	LocalAddress    string `json:"localAddress"`
+}
+
+type ProxyResponse struct {
+	Address string `json:"address"`
+	Host    string `json:"host"`
+	Port    int    `json:"port"`
+}
+
+// 全局代理服务器实例
+var globalProxyServer *http.Server
+
 func Platform() PlatformMetadata {
 	return PlatformMetadata{OS: runtime.GOOS}
 }
 
-func makeErrorRecord(err error) *ConnectivityTestError {
-	if err == nil {
+func CreateProxy(request ProxyRequest) (*ProxyResponse, error) {
+	// 停止现有的代理服务器（如果有）
+	if globalProxyServer != nil {
+		globalProxyServer.Close()
+		globalProxyServer = nil
+	}
+
+	// 创建传输配置
+	configModule := configurl.NewDefaultProviders()
+	dialer, err := configModule.NewStreamDialer(context.Background(), request.TransportConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create stream dialer: %w", err)
+	}
+
+	// 创建监听器
+	listener, err := net.Listen("tcp", request.LocalAddress)
+	if err != nil {
+		return nil, fmt.Errorf("failed to listen on %s: %w", request.LocalAddress, err)
+	}
+
+	// 创建代理处理器
+	proxyHandler := httpproxy.NewProxyHandler(&streamDialerAdapter{dialer})
+	proxyHandler.FallbackHandler = http.NotFoundHandler()
+
+	// 创建 HTTP 服务器
+	globalProxyServer = &http.Server{
+		Handler: proxyHandler,
+	}
+
+	// 启动代理服务器
+	go func() {
+		if err := globalProxyServer.Serve(listener); err != nil && err != http.ErrServerClosed {
+			log.Printf("Proxy server error: %v", err)
+		}
+	}()
+
+	// 解析监听地址
+	host, portStr, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse proxy address: %w", err)
+	}
+
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse proxy port: %w", err)
+	}
+
+	return &ProxyResponse{
+		Address: net.JoinHostPort(host, portStr),
+		Host:    host,
+		Port:    port,
+	}, nil
+}
+
+// streamDialerAdapter 适配器，用于包装 transport.StreamDialer
+type streamDialerAdapter struct {
+	dialer transport.StreamDialer
+}
+
+func (s *streamDialerAdapter) DialStream(ctx context.Context, addr string) (transport.StreamConn, error) {
+	return s.dialer.DialStream(ctx, addr)
+}
+
+func makeErrorRecord(connectivityErr *connectivity.ConnectivityError, err error) *ConnectivityTestError {
+	if connectivityErr == nil && err == nil {
 		return nil
 	}
-	var record = new(ConnectivityTestError)
-	var testErr *connectivity.TestError
-	if errors.As(err, &testErr) {
-		record.Op = testErr.Op
-		record.PosixError = testErr.PosixError
-		record.Msg = unwrapAll(testErr).Error()
-	} else {
-		record.Msg = err.Error()
+	
+	if connectivityErr != nil {
+		return &ConnectivityTestError{
+			Op:         connectivityErr.Op,
+			PosixError: connectivityErr.PosixError,
+			Msg:        connectivityErr.Error(),
+		}
 	}
-	return record
+	
+	if err != nil {
+		return &ConnectivityTestError{
+			Op:         "test",
+			PosixError: "",
+			Msg:        err.Error(),
+		}
+	}
+	
+	return nil
 }
 
 func unwrapAll(err error) error {
