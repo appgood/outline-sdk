@@ -18,9 +18,20 @@ android {
             ignoreAssetsPattern "!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~"
         }
     }
+
+    signingConfigs {
+        release {
+            keyAlias "outlinesdk.jks"
+            keyPassword "mima1234"
+            storeFile file("../keystore/outlinesdk.jks")
+            storePassword "mima1234"
+        }
+    }
+
     buildTypes {
         release {
-            minifyEnabled false
+            minifyEnabled true
+            signingConfig signingConfigs.release
             proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
         }
     }
