@@ -17,6 +17,7 @@ package shared_backend
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -28,6 +29,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Jigsaw-Code/outline-sdk/dns"
@@ -184,10 +186,12 @@ type VPNDevice struct {
 	mu           sync.RWMutex
 }
 
-// 全局 VPN 设备管理
+// 全局 VPN 设备管理 - 增强版
 var (
-	vpnDevices = make(map[string]*VPNDevice)
-	vpnMutex   sync.RWMutex
+	vpnDevices     = make(map[string]*VPNDevice)
+	vpnMutex       sync.RWMutex
+	deviceCounter  int64 = 0
+	debugMode      bool  = true  // 调试模式
 )
 
 func Platform() PlatformMetadata {
@@ -297,8 +301,9 @@ func CreateVPNDevice(request VPNDeviceRequest) (*VPNDeviceResponse, error) {
 	// 创建上下文用于管理生命周期
 	ctx, cancel := context.WithCancel(context.Background())
 	
-	// 生成设备 ID
-	deviceID := fmt.Sprintf("vpn-device-%d", time.Now().Unix())
+	// 生成设备 ID - 使用原子计数器确保唯一性
+	atomic.AddInt64(&deviceCounter, 1)
+	deviceID := fmt.Sprintf("vpn-device-%d-%d", time.Now().Unix(), deviceCounter)
 	
 	vpnDevice := &VPNDevice{
 		id:          deviceID,
@@ -310,10 +315,14 @@ func CreateVPNDevice(request VPNDeviceRequest) (*VPNDeviceResponse, error) {
 		cancel:      cancel,
 	}
 	
-	// 存储设备
+	// 存储设备 - 增强版本
 	vpnMutex.Lock()
 	vpnDevices[deviceID] = vpnDevice
 	vpnMutex.Unlock()
+	
+	if debugMode {
+		log.Printf("✅ VPN设备已创建: %s, 当前设备数量: %d", deviceID, len(vpnDevices))
+	}
 	
 	// 启动数据转发协程
 	go vpnDevice.startForwarding(ctx)
@@ -326,7 +335,44 @@ func CreateVPNDevice(request VPNDeviceRequest) (*VPNDeviceResponse, error) {
 
 func (vd *VPNDevice) startForwarding(ctx context.Context) {
 	defer func() {
+		if debugMode {
+			log.Printf("🔄 VPN设备 %s 开始清理", vd.id)
+		}
 		vd.cleanup()
+	}()
+	
+	if debugMode {
+		log.Printf("🚀 VPN设备 %s 开始数据转发", vd.id)
+	}
+	
+	// 添加设备健康检查
+	healthCtx, healthCancel := context.WithCancel(ctx)
+	defer healthCancel()
+	
+	// 启动健康检查协程
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		
+		for {
+			select {
+			case <-healthCtx.Done():
+				return
+			case <-ticker.C:
+				if debugMode {
+					log.Printf("💓 VPN设备 %s 健康检查", vd.id)
+				}
+				// 检查设备是否还在映射中
+				vpnMutex.RLock()
+				_, exists := vpnDevices[vd.id]
+				vpnMutex.RUnlock()
+				if !exists {
+					log.Printf("⚠️ VPN设备 %s 从映射中消失了！", vd.id)
+					healthCancel()
+					return
+				}
+			}
+		}
 	}()
 	
 	// 启动双向数据转发
@@ -335,7 +381,10 @@ func (vd *VPNDevice) startForwarding(ctx context.Context) {
 	// lwIP 设备 -> Android (设备输出复制到 Android 读取管道)
 	go func() {
 		log.Printf("VPN device %s: Starting lwIP->Android forwarding", vd.id)
-		n, err := io.Copy(vd.toAndroid, vd.device)
+		
+		// 使用带监控的复制
+		n, err := copyWithMonitoring(vd.toAndroid, vd.device, fmt.Sprintf("%s-lwIP->Android", vd.id))
+		
 		log.Printf("VPN device %s: lwIP->Android copy ended: %d bytes, error: %v", vd.id, n, err)
 		done <- err
 	}()
@@ -343,7 +392,10 @@ func (vd *VPNDevice) startForwarding(ctx context.Context) {
 	// Android -> lwIP 设备 (Android 写入管道复制到设备输入)
 	go func() {
 		log.Printf("VPN device %s: Starting Android->lwIP forwarding", vd.id)
-		n, err := io.Copy(vd.device, vd.fromAndroid)
+		
+		// 使用带监控的复制
+		n, err := copyWithMonitoring(vd.device, vd.fromAndroid, fmt.Sprintf("%s-Android->lwIP", vd.id))
+		
 		log.Printf("VPN device %s: Android->lwIP copy ended: %d bytes, error: %v", vd.id, n, err)
 		done <- err
 	}()
@@ -355,6 +407,8 @@ func (vd *VPNDevice) startForwarding(ctx context.Context) {
 	case err := <-done:
 		if err != nil {
 			log.Printf("VPN device %s forwarding error: %v", vd.id, err)
+		} else {
+			log.Printf("VPN device %s forwarding completed normally", vd.id)
 		}
 	}
 }
@@ -362,6 +416,10 @@ func (vd *VPNDevice) startForwarding(ctx context.Context) {
 func (vd *VPNDevice) cleanup() {
 	vd.mu.Lock()
 	defer vd.mu.Unlock()
+	
+	if debugMode {
+		log.Printf("🧹 VPN设备 %s 开始清理资源", vd.id)
+	}
 	
 	if vd.fromDevice != nil {
 		vd.fromDevice.Close()
@@ -382,7 +440,12 @@ func (vd *VPNDevice) cleanup() {
 	// 从全局映射中移除
 	vpnMutex.Lock()
 	delete(vpnDevices, vd.id)
+	remainingDevices := len(vpnDevices)
 	vpnMutex.Unlock()
+	
+	if debugMode {
+		log.Printf("🗑️ VPN设备 %s 已清理完成，剩余设备数量: %d", vd.id, remainingDevices)
+	}
 }
 
 func GetVPNDevice(deviceID string) (*VPNDevice, error) {
@@ -390,11 +453,31 @@ func GetVPNDevice(deviceID string) (*VPNDevice, error) {
 	device, exists := vpnDevices[deviceID]
 	vpnMutex.RUnlock()
 	
+	if debugMode {
+		if exists {
+			log.Printf("✅ GetVPNDevice: Found device %s", deviceID)
+		} else {
+			log.Printf("❌ GetVPNDevice: Device %s not found, available devices: %v", deviceID, getDeviceIDs())
+		}
+	}
+	
 	if !exists {
 		return nil, fmt.Errorf("VPN device %s not found", deviceID)
 	}
 	
 	return device, nil
+}
+
+// 获取所有设备ID的辅助函数（调试用）
+func getDeviceIDs() []string {
+	vpnMutex.RLock()
+	defer vpnMutex.RUnlock()
+	
+	var ids []string
+	for id := range vpnDevices {
+		ids = append(ids, id)
+	}
+	return ids
 }
 
 func StopVPNDevice(deviceID string) error {
@@ -519,4 +602,177 @@ func ParseStringPrefix(utf8Str string) (Prefix, error) {
 		rawBytes[i] = byte(r)
 	}
 	return rawBytes, nil
+}
+
+// 网络连通性测试函数
+func TestNetworkConnectivity(deviceID string) (string, error) {
+	if debugMode {
+		log.Printf("🔍 开始网络连通性测试，设备: %s", deviceID)
+	}
+	
+	device, err := GetVPNDevice(deviceID)
+	if err != nil {
+		return "", fmt.Errorf("设备不存在: %v", err)
+	}
+	
+	result := make(map[string]interface{})
+	
+	// 测试1：设备状态
+	result["device_status"] = "active"
+	result["device_id"] = deviceID
+	
+	// 测试2：管道状态
+	pipeStatus := make(map[string]string)
+	if device.fromDevice != nil {
+		pipeStatus["fromDevice"] = "open"
+	} else {
+		pipeStatus["fromDevice"] = "closed"
+	}
+	if device.toDevice != nil {
+		pipeStatus["toDevice"] = "open"
+	} else {
+		pipeStatus["toDevice"] = "closed"
+	}
+	result["pipe_status"] = pipeStatus
+	
+	// 测试3：尝试小数据包测试
+	testData := []byte("connectivity-test-ping")
+	written, writeErr := device.toDevice.Write(testData)
+	if writeErr != nil {
+		result["write_test"] = fmt.Sprintf("failed: %v", writeErr)
+	} else {
+		result["write_test"] = fmt.Sprintf("success: %d bytes", written)
+	}
+	
+	if debugMode {
+		log.Printf("🔍 网络连通性测试完成: %+v", result)
+	}
+	
+	// 将结果编码为JSON字符串
+	resultBytes, _ := json.Marshal(result)
+	return string(resultBytes), nil
+}
+
+// lwIP网络栈诊断
+func DiagnoseLwIPStack(deviceID string) (string, error) {
+	if debugMode {
+		log.Printf("🔧 开始lwIP网络栈诊断，设备: %s", deviceID)
+	}
+	
+	device, err := GetVPNDevice(deviceID)
+	if err != nil {
+		return "", fmt.Errorf("设备不存在: %v", err)
+	}
+	
+	result := make(map[string]interface{})
+	result["device_id"] = deviceID
+	result["timestamp"] = time.Now().Unix()
+	
+	// 检查lwIP设备状态
+	if device.device != nil {
+		result["lwip_device"] = "active"
+		result["lwip_mtu"] = device.device.MTU()
+	} else {
+		result["lwip_device"] = "null"
+	}
+	
+	// 检查管道连接状态
+	pipeStatus := make(map[string]interface{})
+	
+	// 尝试写入测试数据到各个管道
+	testPayload := []byte("lwip-test-" + fmt.Sprintf("%d", time.Now().Unix()))
+	
+	if device.toDevice != nil {
+		_, writeErr := device.toDevice.Write(testPayload)
+		if writeErr != nil {
+			pipeStatus["toDevice_write"] = fmt.Sprintf("error: %v", writeErr)
+		} else {
+			pipeStatus["toDevice_write"] = "success"
+		}
+	} else {
+		pipeStatus["toDevice_write"] = "pipe_null"
+	}
+	
+	result["pipe_diagnostics"] = pipeStatus
+	
+	// 全局设备统计
+	vpnMutex.RLock()
+	totalDevices := len(vpnDevices)
+	var deviceList []string
+	for id := range vpnDevices {
+		deviceList = append(deviceList, id)
+	}
+	vpnMutex.RUnlock()
+	
+	result["global_stats"] = map[string]interface{}{
+		"total_devices": totalDevices,
+		"device_list":   deviceList,
+	}
+	
+	if debugMode {
+		log.Printf("🔧 lwIP诊断完成: %+v", result)
+	}
+	
+	resultBytes, _ := json.Marshal(result)
+	return string(resultBytes), nil
+}
+
+// 带监控的数据复制函数
+func copyWithMonitoring(dst io.Writer, src io.Reader, name string) (int64, error) {
+	var totalBytes int64
+	var packetCount int64
+	
+	buffer := make([]byte, 32*1024) // 32KB缓冲区
+	
+	for {
+		nr, err := src.Read(buffer)
+		if nr > 0 {
+			packetCount++
+			totalBytes += int64(nr)
+			
+			// 每100个包记录一次详细信息
+			if packetCount%100 == 0 {
+				if debugMode {
+					log.Printf("📊 %s: 处理了 %d 个包, 总计 %d 字节", name, packetCount, totalBytes)
+				}
+			}
+			
+			// 分析包内容（前20字节用于IP头分析）
+			if nr >= 20 && debugMode && packetCount <= 5 {
+				version := (buffer[0] & 0xF0) >> 4
+				protocol := buffer[9]
+				var srcIP, dstIP string
+				if nr >= 20 {
+					srcIP = fmt.Sprintf("%d.%d.%d.%d", buffer[12], buffer[13], buffer[14], buffer[15])
+					dstIP = fmt.Sprintf("%d.%d.%d.%d", buffer[16], buffer[17], buffer[18], buffer[19])
+				}
+				log.Printf("📦 %s 包#%d: IPv%d, 协议=%d, %s->%s, 长度=%d", 
+					name, packetCount, version, protocol, srcIP, dstIP, nr)
+			}
+			
+			nw, ew := dst.Write(buffer[0:nr])
+			if nw < 0 || nr < nw {
+				nw = 0
+				if ew == nil {
+					ew = fmt.Errorf("invalid write result")
+				}
+			}
+			if ew != nil {
+				log.Printf("❌ %s: 写入错误: %v", name, ew)
+				return totalBytes, ew
+			}
+			if nr != nw {
+				log.Printf("⚠️ %s: 部分写入 %d/%d", name, nw, nr)
+				return totalBytes, io.ErrShortWrite
+			}
+		}
+		if err != nil {
+			if err != io.EOF {
+				log.Printf("❌ %s: 读取错误: %v", name, err)
+			} else {
+				log.Printf("📥 %s: 读取完成, 总计 %d 字节, %d 个包", name, totalBytes, packetCount)
+			}
+			return totalBytes, err
+		}
+	}
 }

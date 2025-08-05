@@ -31,6 +31,7 @@ android {
     buildTypes {
         release {
             minifyEnabled true
+            shrinkResources true
             signingConfig signingConfigs.release
             proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
         }
@@ -69,6 +70,8 @@ dependencies {
     // JSON 序列化和 Go AAR
     implementation "org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.0"
     implementation files('../../../shared_backend/output/SharedBackend.aar')
+
+    implementation 'com.jakewharton.timber:timber:4.7.1'
 }
 
 apply from: "capacitor.build.gradle"
